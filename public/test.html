@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Video Chat</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.2.0/tf.min.js"></script>
+    <style>
+        .video-wrapper {
+            position: relative;
+            height: 480px;
+        }
+
+        .video-container {
+            width: 100%;
+            height: 100%;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+        }
+
+        #avatarContainer {
+            width: 100%;
+            height: 100%;
+        }
+
+        .speech-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px;
+            border-radius: 20px;
+        }
+    </style>
+</head>
+
+<body class="bg-dark">
+    <div class="container py-4">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="video-wrapper">
+                    <div class="video-container">
+                        <video id="userVideo" autoplay muted playsinline></video>
+                    </div>
+                    <div class="controls">
+                        <button id="micToggle" class="btn btn-light mx-2"><i class="bi bi-mic"></i></button>
+                        <button id="videoToggle" class="btn btn-light mx-2"><i class="bi bi-camera-video"></i></button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="video-wrapper">
+                    <div class="video-container">
+                        <div id="avatarContainer"></div>
+                        <div class="speech-indicator" id="speechStatus"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class SpeechHandler {
+            constructor(onSpeechStart, onSpeechEnd, onResult) {
+                this.recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+                this.recognition.continuous = true;
+                this.recognition.interimResults = true;
+
+                this.recognition.onstart = onSpeechStart;
+                this.recognition.onend = onSpeechEnd;
+                this.recognition.onresult = (event) => {
+                    const result = event.results[event.results.length - 1];
+                    if (result.isFinal) {
+                        onResult(result[0].transcript);
+                    }
+                };
+
+                this.synthesis = window.speechSynthesis;
+                this.loadVoices();
+            }
+
+            async loadVoices() {
+                if (this.synthesis.getVoices().length === 0) {
+                    await new Promise(resolve => {
+                        this.synthesis.onvoiceschanged = resolve;
+                    });
+                }
+                this.voice = this.synthesis.getVoices().find(v => v.lang === 'en-US');
+            }
+
+            startListening() {
+                this.recognition.start();
+            }
+
+            stopListening() {
+                this.recognition.stop();
+            }
+
+            speak(text) {
+                return new Promise(resolve => {
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.voice = this.voice;
+                    utterance.rate = 1;
+                    utterance.pitch = 1;
+                    utterance.onend = resolve;
+                    this.synthesis.speak(utterance);
+                });
+            }
+        }
+
+        class RealisticAvatar {
+            constructor(container) {
+                this.container = container;
+                this.setupScene();
+                this.createAvatar();
+                this.animate();
+            }
+
+            setupScene() {
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(50, this.container.clientWidth / this.container.clientHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+                this.container.appendChild(this.renderer.domElement);
+
+                this.light = new THREE.DirectionalLight(0xffffff, 1);
+                this.light.position.set(0, 1, 2);
+                this.scene.add(this.light);
+                this.scene.add(new THREE.AmbientLight(0x404040));
+
+                this.camera.position.z = 5;
+            }
+
+            createAvatar() {
+                // Create more realistic head geometry
+                const headGeometry = new THREE.SphereGeometry(1, 64, 64);
+                const skinMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xffe0bd,
+                    roughness: 0.5,
+                    metalness: 0.1
+                });
+                this.head = new THREE.Mesh(headGeometry, skinMaterial);
+                this.scene.add(this.head);
+
+                // Add facial features
+                this.addEyes();
+                this.addNose();
+                this.addMouth();
+                this.addHair();
+            }
+
+            addEyes() {
+                const eyeGeometry = new THREE.SphereGeometry(0.15, 32, 32);
+                const eyeWhiteMaterial = new THREE.MeshPhongMaterial({ color: 0xffffff });
+                const irisMaterial = new THREE.MeshPhongMaterial({ color: 0x4b86b4 });
+                const pupilMaterial = new THREE.MeshPhongMaterial({ color: 0x000000 });
+
+                // Create detailed eyes with iris and pupil
+                this.eyes = {
+                    left: new THREE.Group(),
+                    right: new THREE.Group()
+                };
+
+                ['left', 'right'].forEach(side => {
+                    const eyeWhite = new THREE.Mesh(eyeGeometry, eyeWhiteMaterial);
+                    const iris = new THREE.Mesh(
+                        new THREE.SphereGeometry(0.07, 32, 32),
+                        irisMaterial
+                    );
+                    const pupil = new THREE.Mesh(
+                        new THREE.SphereGeometry(0.03, 32, 32),
+                        pupilMaterial
+                    );
+
+                    iris.position.z = 0.12;
+                    pupil.position.z = 0.13;
+
+                    this.eyes[side].add(eyeWhite);
+                    this.eyes[side].add(iris);
+                    this.eyes[side].add(pupil);
+                    this.eyes[side].position.x = side === 'left' ? -0.3 : 0.3;
+                    this.eyes[side].position.y = 0.2;
+                    this.eyes[side].position.z = 0.8;
+
+                    this.head.add(this.eyes[side]);
+                });
+            }
+
+            addNose() {
+                const noseGeometry = new THREE.ConeGeometry(0.1, 0.3, 32);
+                const noseMaterial = new THREE.MeshPhongMaterial({ color: 0xffceb5 });
+                this.nose = new THREE.Mesh(noseGeometry, noseMaterial);
+                this.nose.rotation.x = -Math.PI / 2;
+                this.nose.position.z = 0.9;
+                this.head.add(this.nose);
+            }
+
+            addMouth() {
+                const mouthGeometry = new THREE.TorusGeometry(0.2, 0.04, 32, 32, Math.PI);
+                const mouthMaterial = new THREE.MeshPhongMaterial({ color: 0xff9999 });
+                this.mouth = new THREE.Mesh(mouthGeometry, mouthMaterial);
+                this.mouth.position.y = -0.3;
+                this.mouth.position.z = 0.8;
+                this.mouth.rotation.x = Math.PI;
+                this.head.add(this.mouth);
+            }
+
+            addHair() {
+                const hairGeometry = new THREE.SphereGeometry(1.1, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2);
+                const hairMaterial = new THREE.MeshPhongMaterial({ color: 0x4a3421 });
+                this.hair = new THREE.Mesh(hairGeometry, hairMaterial);
+                this.hair.position.y = 0.1;
+                this.head.add(this.hair);
+            }
+
+            speak() {
+                const duration = 1000;
+                const startTime = Date.now();
+
+                const animate = () => {
+                    const elapsed = Date.now() - startTime;
+                    if (elapsed < duration) {
+                        this.mouth.scale.y = 1 + Math.sin(elapsed * 0.02) * 0.5;
+                        requestAnimationFrame(animate);
+                    } else {
+                        this.mouth.scale.y = 1;
+                    }
+                };
+
+                animate();
+            }
+
+            blink() {
+                ['left', 'right'].forEach(side => {
+                    const eye = this.eyes[side];
+                    eye.scale.y = 0.1;
+                    setTimeout(() => {
+                        eye.scale.y = 1;
+                    }, 150);
+                });
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+
+                // Natural head movement
+                this.head.rotation.y = Math.sin(Date.now() * 0.001) * 0.1;
+                this.head.position.y = Math.sin(Date.now() * 0.002) * 0.05;
+
+                // Random blinking
+                if (Math.random() < 0.01) {
+                    this.blink();
+                }
+
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        class ChatInterface {
+            constructor() {
+                this.setupComponents();
+                this.initializeVideoStream();
+            }
+
+            setupComponents() {
+                this.avatar = new RealisticAvatar(document.getElementById('avatarContainer'));
+                this.speechHandler = new SpeechHandler(
+                    () => this.onSpeechStart(),
+                    () => this.onSpeechEnd(),
+                    (text) => this.onSpeechResult(text)
+                );
+
+                document.getElementById('micToggle').addEventListener('click', () => this.toggleSpeech());
+            }
+
+            async initializeVideoStream() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    document.getElementById('userVideo').srcObject = stream;
+                } catch (error) {
+                    console.error('Camera access error:', error);
+                }
+            }
+
+            toggleSpeech() {
+                if (this.isListening) {
+                    this.speechHandler.stopListening();
+                    this.isListening = false;
+                } else {
+                    this.speechHandler.startListening();
+                    this.isListening = true;
+                }
+            }
+
+            async onSpeechResult(text) {
+                const response = await this.processQuery(text);
+                this.avatar.speak();
+                await this.speechHandler.speak(response);
+            }
+
+            async processQuery(text) {
+                const responses = {
+                    greeting: "Hello! I'm your AI assistant. How can I help you today?",
+                    help: "I understand you need assistance. Could you please specify what you'd like help with?",
+                    product: "I'd be happy to tell you about our products. Which specific features are you interested in?",
+                    technical: "I can help you with technical support. What issue are you experiencing?",
+                    default: "I'm here to help. Could you please provide more details about your request?"
+                };
+
+                const lowercaseText = text.toLowerCase();
+                if (lowercaseText.includes('hello') || lowercaseText.includes('hi')) return responses.greeting;
+                if (lowercaseText.includes('help')) return responses.help;
+                if (lowercaseText.includes('product')) return responses.product;
+                if (lowercaseText.includes('technical') || lowercaseText.includes('support')) return responses.technical;
+                return responses.default;
+            }
+
+            onSpeechStart() {
+                document.getElementById('speechStatus').textContent = 'Listening...';
+            }
+
+            onSpeechEnd() {
+                document.getElementById('speechStatus').textContent = '';
+            }
+        }
+
+        window.addEventListener('load', () => new ChatInterface());
+    </script>
+</body>
+
+</html>
