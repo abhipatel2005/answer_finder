@@ -1,0 +1,5 @@
+python-docx
+google.generative-ai
+dotenv
+PyMuPDF #fitz
+re
